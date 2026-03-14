@@ -5,32 +5,29 @@ import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.geom.*;
-import java.awt.image.BufferedImage;
 import java.util.Random;
 
 public class GreenScreenTopoRadar extends JPanel implements ActionListener {
 
     private final Timer timer;
-    private double sweepAngle = 0.0;
+    private double sweepAngle = 0.0; // radians, 0 = top, increasing clockwise
     private final Random random = new Random();
 
-    // Precomputed terrain field
     private float[][] heightField;
-    private int fieldW = 220;
-    private int fieldH = 220;
+    private final int fieldW = 220;
+    private final int fieldH = 220;
 
     public GreenScreenTopoRadar() {
         setPreferredSize(new Dimension(1000, 1000));
         setBackground(Color.BLACK);
         generateHeightField();
-        timer = new Timer(33, this); // ~30 FPS
+        timer = new Timer(33, this);
         timer.start();
     }
 
     private void generateHeightField() {
         heightField = new float[fieldW][fieldH];
 
-        // Build a synthetic terrain using several gaussian hills + waves
         for (int y = 0; y < fieldH; y++) {
             for (int x = 0; x < fieldW; x++) {
                 double nx = (double) x / fieldW;
@@ -45,7 +42,6 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
                         0.12 * Math.sin(30 * nx + 8 * ny) +
                         0.08 * Math.cos(22 * ny - 4 * nx);
 
-                // Normalize-ish into 0..1 range
                 value = (value + 0.5) / 2.6;
                 value = Math.max(0, Math.min(1, value));
                 heightField[x][y] = (float) value;
@@ -57,6 +53,16 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
         double dx = x - cx;
         double dy = y - cy;
         return Math.exp(-(dx * dx + dy * dy) / (2 * sigma * sigma));
+    }
+
+    // Radar bearing helpers:
+    // 0° = top, 90° = right, 180° = bottom, 270° = left
+    private double radarX(int cx, double angle, double distance) {
+        return cx + Math.sin(angle) * distance;
+    }
+
+    private double radarY(int cy, double angle, double distance) {
+        return cy - Math.cos(angle) * distance;
     }
 
     @Override
@@ -73,38 +79,21 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
         int cy = h / 2;
         int radius = (int) (size * 0.42);
 
-        // Background
         drawBackgroundGlow(g2, cx, cy, radius);
 
-        // Circular radar clip
         Shape radarCircle = new Ellipse2D.Double(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
         g2.setClip(radarCircle);
 
-        // Scanline / CRT tint backdrop
         drawCrtBackdrop(g2, cx, cy, radius);
-
-        // Grid
         drawRadarGrid(g2, cx, cy, radius);
-
-        // Topographical contours
         drawTopography(g2, cx, cy, radius);
-
-        // Sweep beam
         drawSweep(g2, cx, cy, radius);
-
-        // Noise speckles
         drawNoise(g2, cx, cy, radius);
 
-        // Remove clip
         g2.setClip(null);
 
-        // Outer bezel / rim
         drawOuterRing(g2, cx, cy, radius);
-
-        // Center crosshair accent
         drawCenterMarker(g2, cx, cy);
-
-        // Small label text
         drawHudText(g2, w, h, cx, cy, radius);
 
         g2.dispose();
@@ -130,18 +119,15 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
     private void drawCrtBackdrop(Graphics2D g2, int cx, int cy, int radius) {
         Shape radarCircle = new Ellipse2D.Double(cx - radius, cy - radius, radius * 2.0, radius * 2.0);
 
-        // Subtle dark green fill
         g2.setColor(new Color(0, 18, 0));
         g2.fill(radarCircle);
 
-        // Horizontal scanlines
         for (int y = cy - radius; y <= cy + radius; y += 3) {
             int alpha = (y % 6 == 0) ? 28 : 12;
             g2.setColor(new Color(30, 255, 80, alpha));
             g2.drawLine(cx - radius, y, cx + radius, y);
         }
 
-        // Slight vignette
         float[] dist = {0.0f, 0.75f, 1.0f};
         Color[] colors = {
                 new Color(0, 0, 0, 0),
@@ -161,38 +147,34 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
     private void drawRadarGrid(Graphics2D g2, int cx, int cy, int radius) {
         g2.setStroke(new BasicStroke(1.2f));
 
-        // Concentric rings
         for (int i = 1; i <= 5; i++) {
             int r = radius * i / 5;
             g2.setColor(new Color(80, 255, 120, 55));
             g2.drawOval(cx - r, cy - r, r * 2, r * 2);
         }
 
-        // Cross lines
         g2.setColor(new Color(80, 255, 120, 70));
         g2.drawLine(cx - radius, cy, cx + radius, cy);
         g2.drawLine(cx, cy - radius, cx, cy + radius);
 
-        // Angle spokes
-        for (int deg = 30; deg < 180; deg += 30) {
+        for (int deg = 30; deg < 360; deg += 30) {
             double a = Math.toRadians(deg);
-            int x1 = (int) (cx + Math.cos(a) * radius);
-            int y1 = (int) (cy - Math.sin(a) * radius);
-            int x2 = (int) (cx - Math.cos(a) * radius);
-            int y2 = (int) (cy + Math.sin(a) * radius);
+            int x = (int) radarX(cx, a, radius);
+            int y = (int) radarY(cy, a, radius);
+            int xOpp = (int) radarX(cx, a + Math.PI, radius);
+            int yOpp = (int) radarY(cy, a + Math.PI, radius);
+
             g2.setColor(new Color(80, 255, 120, 35));
-            g2.drawLine(x1, y1, x2, y2);
+            g2.drawLine(x, y, xOpp, yOpp);
         }
     }
 
     private void drawTopography(Graphics2D g2, int cx, int cy, int radius) {
-        // Terrain will be drawn in a square mapped into radar circle bounds.
         int left = cx - radius;
         int top = cy - radius;
         int width = radius * 2;
         int height = radius * 2;
 
-        // Contour thresholds
         float[] levels = {0.18f, 0.28f, 0.38f, 0.48f, 0.58f, 0.68f, 0.78f, 0.88f};
 
         for (int i = 0; i < levels.length; i++) {
@@ -282,9 +264,10 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
     private void drawSweep(Graphics2D g2, int cx, int cy, int radius) {
         double beamWidth = Math.toRadians(38);
 
-        // Main wedge gradient using multiple slices for a smooth old-school sweep
         for (int i = 0; i < 28; i++) {
             double frac = i / 28.0;
+
+            // trailing wedge behind the current beam, clockwise motion
             double a1 = sweepAngle - beamWidth * frac;
             double a2 = sweepAngle - beamWidth * (frac + 1.0 / 28.0);
 
@@ -293,22 +276,20 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
 
             Path2D wedge = new Path2D.Double();
             wedge.moveTo(cx, cy);
-            wedge.lineTo(cx + Math.cos(a1) * radius, cy - Math.sin(a1) * radius);
-            wedge.lineTo(cx + Math.cos(a2) * radius, cy - Math.sin(a2) * radius);
+            wedge.lineTo(radarX(cx, a1, radius), radarY(cy, a1, radius));
+            wedge.lineTo(radarX(cx, a2, radius), radarY(cy, a2, radius));
             wedge.closePath();
 
             g2.setColor(new Color(80, 255, 120, alpha / 3));
             g2.fill(wedge);
         }
 
-        // Bright beam edge
         g2.setStroke(new BasicStroke(2.0f));
         g2.setColor(new Color(180, 255, 180, 180));
-        int ex = (int) (cx + Math.cos(sweepAngle) * radius);
-        int ey = (int) (cy - Math.sin(sweepAngle) * radius);
+        int ex = (int) radarX(cx, sweepAngle, radius);
+        int ey = (int) radarY(cy, sweepAngle, radius);
         g2.drawLine(cx, cy, ex, ey);
 
-        // Hot center glow
         RadialGradientPaint glow = new RadialGradientPaint(
                 new Point2D.Double(cx, cy),
                 24f,
@@ -323,8 +304,8 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
         for (int i = 0; i < 280; i++) {
             double angle = random.nextDouble() * Math.PI * 2;
             double dist = radius * Math.sqrt(random.nextDouble());
-            int x = (int) (cx + Math.cos(angle) * dist);
-            int y = (int) (cy - Math.sin(angle) * dist);
+            int x = (int) radarX(cx, angle, dist);
+            int y = (int) radarY(cy, angle, dist);
 
             int brightness = 120 + random.nextInt(136);
             int alpha = random.nextInt(70);
@@ -334,12 +315,11 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
             g2.fillRect(x, y, size, size);
         }
 
-        // A few stronger radar returns
         for (int i = 0; i < 16; i++) {
             double angle = random.nextDouble() * Math.PI * 2;
             double dist = radius * (0.15 + 0.8 * random.nextDouble());
-            int x = (int) (cx + Math.cos(angle) * dist);
-            int y = (int) (cy - Math.sin(angle) * dist);
+            int x = (int) radarX(cx, angle, dist);
+            int y = (int) radarY(cy, angle, dist);
 
             RadialGradientPaint ping = new RadialGradientPaint(
                     new Point2D.Double(x, y),
@@ -374,28 +354,32 @@ public class GreenScreenTopoRadar extends JPanel implements ActionListener {
         g2.setColor(new Color(140, 255, 160, 170));
         g2.setFont(new Font("Monospaced", Font.PLAIN, 16));
 
+        int sweepDegrees = ((int) Math.toDegrees(sweepAngle)) % 360;
+        if (sweepDegrees < 0) sweepDegrees += 360;
+
         g2.drawString("TOPOGRAPHIC RADAR DISPLAY", 30, 35);
         g2.drawString("MODE: TERRAIN CONTOUR", 30, 58);
-        g2.drawString(String.format("SWEEP: %03d°", (int) Math.toDegrees((sweepAngle + 2 * Math.PI) % (2 * Math.PI))), 30, 81);
+        g2.drawString(String.format("SWEEP: %03d°", sweepDegrees), 30, 81);
 
         g2.drawString("RANGE 120 NM", w - 180, 35);
         g2.drawString("CRT PHOSPHOR EMULATION", w - 250, h - 28);
 
-        // Tiny tick labels around ring
+        // Bearing labels: 000 at top, increasing clockwise
         g2.setFont(new Font("Monospaced", Font.PLAIN, 12));
         for (int deg = 0; deg < 360; deg += 30) {
             double a = Math.toRadians(deg);
-            int tx = (int) (cx + Math.cos(a) * (radius + 18));
-            int ty = (int) (cy - Math.sin(a) * (radius + 18));
-            String label = String.valueOf(deg);
+            int tx = (int) radarX(cx, a, radius + 18);
+            int ty = (int) radarY(cy, a, radius + 18);
+            String label = String.format("%02d", deg);
             g2.drawString(label, tx - 8, ty + 4);
         }
     }
 
     @Override
     public void actionPerformed(ActionEvent e) {
+        // Clockwise sweep
         sweepAngle += 0.03;
-        if (sweepAngle > Math.PI * 2) {
+        if (sweepAngle >= Math.PI * 2) {
             sweepAngle -= Math.PI * 2;
         }
         repaint();
