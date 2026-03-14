@@ -1,4 +1,4 @@
-package org.cryptners;
+package org.cryptnerd;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
